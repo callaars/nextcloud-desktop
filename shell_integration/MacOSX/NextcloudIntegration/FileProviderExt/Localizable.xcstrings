@@ -1063,6 +1063,18 @@
         }
       }
     },
+    "Force sync state reset" : {
+      "comment" : "Context menu item label.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Force sync state reset"
+          }
+        }
+      }
+    },
     "Open in browser" : {
       "comment" : "Context menu item label.",
       "extractionState" : "manual",

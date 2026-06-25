@@ -1890,4 +1890,94 @@ final class FilesDatabaseManagerTests: NextcloudFileProviderKitTestCase {
         let storedB = try XCTUnwrap(Self.dbManager.itemMetadata(ocId: "B"))
         XCTAssertFalse(storedB.deleted)
     }
+
+    func testResetSyncStateForDirectoryAndChildren() throws {
+        let davUrl = Self.account.davFilesUrl
+
+        // Target directory at the sync root.
+        var targetDir = SendableItemMetadata(ocId: "targetDir", fileName: "TargetDir", account: Self.account)
+        targetDir.directory = true
+        targetDir.uploaded = true
+        targetDir.serverUrl = davUrl
+        targetDir.etag = "etag-target"
+        Self.dbManager.addItemMetadata(targetDir)
+
+        // A file directly inside the target directory. Files do not gate child
+        // re-enumeration, so their etag must be left untouched.
+        var childFile = SendableItemMetadata(ocId: "childFile", fileName: "child.txt", account: Self.account)
+        childFile.serverUrl = davUrl + "/TargetDir"
+        childFile.etag = "etag-childfile"
+        Self.dbManager.addItemMetadata(childFile)
+
+        // A descendant directory — its etag must be invalidated too.
+        var subDir = SendableItemMetadata(ocId: "subDir", fileName: "SubDir", account: Self.account)
+        subDir.directory = true
+        subDir.uploaded = true
+        subDir.serverUrl = davUrl + "/TargetDir"
+        subDir.etag = "etag-subdir"
+        Self.dbManager.addItemMetadata(subDir)
+
+        // A deeper file under the descendant directory — etag untouched.
+        var deepFile = SendableItemMetadata(ocId: "deepFile", fileName: "deep.txt", account: Self.account)
+        deepFile.serverUrl = davUrl + "/TargetDir/SubDir"
+        deepFile.etag = "etag-deepfile"
+        Self.dbManager.addItemMetadata(deepFile)
+
+        // A descendant directory with a pending upload — must be skipped.
+        var uploadingDir = SendableItemMetadata(ocId: "uploadingDir", fileName: "UploadingDir", account: Self.account)
+        uploadingDir.directory = true
+        uploadingDir.serverUrl = davUrl + "/TargetDir"
+        uploadingDir.etag = "etag-uploading"
+        uploadingDir.status = Status.inUpload.rawValue
+        Self.dbManager.addItemMetadata(uploadingDir)
+
+        // A sibling directory outside the target subtree — must be untouched.
+        var siblingDir = SendableItemMetadata(ocId: "siblingDir", fileName: "SiblingDir", account: Self.account)
+        siblingDir.directory = true
+        siblingDir.uploaded = true
+        siblingDir.serverUrl = davUrl
+        siblingDir.etag = "etag-sibling"
+        Self.dbManager.addItemMetadata(siblingDir)
+
+        // A directory whose name shares the target's prefix (e.g. "TargetDir2")
+        // must NOT be matched by the path-prefix query.
+        var prefixDir = SendableItemMetadata(ocId: "prefixDir", fileName: "TargetDir2", account: Self.account)
+        prefixDir.directory = true
+        prefixDir.uploaded = true
+        prefixDir.serverUrl = davUrl
+        prefixDir.etag = "etag-prefix"
+        Self.dbManager.addItemMetadata(prefixDir)
+
+        let resetCount = Self.dbManager.resetSyncStateForDirectoryAndChildren(ocId: "targetDir")
+
+        // Target + SubDir invalidated; uploadingDir skipped.
+        XCTAssertEqual(resetCount, 2)
+
+        XCTAssertEqual(Self.dbManager.itemMetadata(ocId: "targetDir")?.etag, "")
+        XCTAssertEqual(Self.dbManager.itemMetadata(ocId: "subDir")?.etag, "")
+
+        // In-upload directory and non-directory items keep their etags.
+        XCTAssertEqual(Self.dbManager.itemMetadata(ocId: "uploadingDir")?.etag, "etag-uploading")
+        XCTAssertEqual(Self.dbManager.itemMetadata(ocId: "childFile")?.etag, "etag-childfile")
+        XCTAssertEqual(Self.dbManager.itemMetadata(ocId: "deepFile")?.etag, "etag-deepfile")
+
+        // Items outside the subtree are untouched.
+        XCTAssertEqual(Self.dbManager.itemMetadata(ocId: "siblingDir")?.etag, "etag-sibling")
+        XCTAssertEqual(Self.dbManager.itemMetadata(ocId: "prefixDir")?.etag, "etag-prefix")
+    }
+
+    func testResetSyncStateForNonexistentDirectoryReturnsNil() {
+        XCTAssertNil(Self.dbManager.resetSyncStateForDirectoryAndChildren(ocId: "does-not-exist"))
+    }
+
+    func testResetSyncStateForNonDirectoryReturnsNil() throws {
+        var file = SendableItemMetadata(ocId: "plainFile", fileName: "file.txt", account: Self.account)
+        file.serverUrl = Self.account.davFilesUrl
+        file.etag = "etag-file"
+        Self.dbManager.addItemMetadata(file)
+
+        // A non-directory ocId is not matched by the directory guard.
+        XCTAssertNil(Self.dbManager.resetSyncStateForDirectoryAndChildren(ocId: "plainFile"))
+        XCTAssertEqual(Self.dbManager.itemMetadata(ocId: "plainFile")?.etag, "etag-file")
+    }
 }

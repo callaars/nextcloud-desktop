@@ -1096,6 +1096,24 @@ void SocketApi::command_UNLOCK_FILE(const QString &localFile, SocketListener *li
     setFileLock(localFile, SyncFileItem::LockStatus::UnlockedItem);
 }
 
+void SocketApi::command_FORCE_RESYNC(const QString &localFile, SocketListener *listener)
+{
+    Q_UNUSED(listener)
+
+    const auto fileData = FileData::get(localFile);
+    if (!fileData.folder) {
+        qCWarning(lcSocketApi) << "command_FORCE_RESYNC: no sync folder for path" << localFile;
+        return;
+    }
+    if (!FileSystem::isDir(fileData.localPath)) {
+        qCWarning(lcSocketApi) << "command_FORCE_RESYNC: path is not a directory:" << localFile;
+        return;
+    }
+
+    qCInfo(lcSocketApi) << "Force resync requested for" << localFile;
+    fileData.folder->resetPathForResync(fileData.folderRelativePath);
+}
+
 void SocketApi::setFileLock(const QString &localFile, const SyncFileItem::LockStatus lockState) const
 {
     const auto fileData = FileData::get(localFile);
@@ -1393,6 +1411,10 @@ void SocketApi::command_GET_MENU_ITEMS(const QString &argument, OCC::SocketListe
         const auto rootE2eeFolderFlag = isE2eEncryptedRootFolder ? SharingContextItemRootEncryptedFolderFlag::RootEncryptedFolder : SharingContextItemRootEncryptedFolderFlag::NonRootEncryptedFolder;
         sendSharingContextMenuOptions(fileData, listener, itemEncryptionFlag, rootE2eeFolderFlag);
         sendFileActionsContextMenuOptions(fileData, listener);
+
+        if (fileInfo.isDir() && isOnTheServer) {
+            listener->sendMessage(QLatin1String("MENU_ITEM:FORCE_RESYNC::") + tr("Force sync state reset"));
+        }
 
         // Conflict files get conflict resolution actions
         bool isConflict = Utility::isConflictFile(fileData.folderRelativePath);

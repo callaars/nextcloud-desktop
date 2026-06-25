@@ -43,6 +43,7 @@
 #include <QPushButton>
 #include <QApplication>
 #include <type_traits>
+#include <utility>
 
 namespace {
 #ifndef VERSION_C
@@ -1403,6 +1404,15 @@ void Folder::slotSyncFinished(bool success)
         // the folder again.
         scheduleThisFolderSoon();
     }
+
+    // Apply any force-resyncs that arrived while the engine was busy.
+    if (!_pendingResyncPaths.isEmpty()) {
+        const QStringList paths = std::exchange(_pendingResyncPaths, {});
+        for (const auto &path : paths) {
+            qCInfo(lcFolder) << "Applying deferred force-resync for" << path;
+            resetPathForResync(path);
+        }
+    }
 }
 
 void Folder::slotEmitFinishedDelayed()
@@ -1598,6 +1608,34 @@ void Folder::setSilenceErrorsUntilNextSync(bool silenceErrors)
 void Folder::schedulePathForLocalDiscovery(const QString &relativePath)
 {
     _localDiscoveryTracker->addTouchedPath(relativePath.toUtf8());
+}
+
+void Folder::resetPathForResync(const QString &relativePath)
+{
+    if (isBusy()) {
+        qCInfo(lcFolder) << "Deferring force-resync for" << relativePath << "until sync finishes";
+        if (!_pendingResyncPaths.contains(relativePath)) {
+            _pendingResyncPaths.append(relativePath);
+        }
+        return;
+    }
+
+    qCInfo(lcFolder) << "Resetting sync state for path" << relativePath << "in folder" << path();
+
+    // Wipe all journal state for the path. The returned list contains any
+    // in-progress downloads whose temporary files must also be removed from disk.
+    const QVector<SyncJournalDb::DownloadInfo> deletedDownloads =
+        _journal.wipeSyncStateForPathAndBelow(relativePath);
+
+    QDir folderDir(_definition.localPath);
+    for (const auto &info : deletedDownloads) {
+        const QString tmpPath = folderDir.filePath(info._tmpfile);
+        qCInfo(lcFolder) << "Removing orphaned download temp file:" << tmpPath;
+        FileSystem::remove(tmpPath);
+    }
+
+    schedulePathForLocalDiscovery(relativePath);
+    scheduleThisFolderSoon();
 }
 
 void Folder::slotFolderConflicts(const QString &folder, const QStringList &conflictPaths)

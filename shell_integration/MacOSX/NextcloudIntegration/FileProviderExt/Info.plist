@@ -85,6 +85,14 @@
 				<key>NSExtensionFileProviderActionName</key>
 				<string>Copy internal link</string>
 			</dict>
+			<dict>
+				<key>NSExtensionFileProviderActionActivationRule</key>
+				<string>SUBQUERY ( fileproviderItems, $fileproviderItem, $fileproviderItem.userInfo.displayForceResync == true ).@count &gt; 0</string>
+				<key>NSExtensionFileProviderActionIdentifier</key>
+				<string>com.nextcloud.desktopclient.FileProviderExt.ForceResyncAction</string>
+				<key>NSExtensionFileProviderActionName</key>
+				<string>Force sync state reset</string>
+			</dict>
 		</array>
 		<key>NSExtensionFileProviderAllowsContextualMenuDownloadEntry</key>
 		<false/>

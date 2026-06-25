@@ -224,6 +224,16 @@ public final class Item: NSObject, NSFileProviderItem, Sendable {
         // unpin signal was still queued (#9891).
         userInfoDict["displayEvict"] = metadata.downloaded && !metadata.keepDownloaded
 
+        // Gate the "Force sync state reset" context menu action on real,
+        // server-backed directories. It invalidates the etags of the directory
+        // subtree so the framework re-enumerates it from scratch, which only
+        // makes sense for an uploaded directory that exists on the server. The
+        // root and trash pseudo-containers are excluded. Mirrors the classic
+        // sync engine's `isDir && isOnTheServer` gate in `SocketApi`.
+        userInfoDict["displayForceResync"] = metadata.directory
+            && metadata.uploaded
+            && ![.rootContainer, .trashContainer].contains(itemIdentifier)
+
         // Gate the "Open in browser" context menu action on items that have a
         // server-side counterpart whose private link the main app can resolve.
         // This excludes:

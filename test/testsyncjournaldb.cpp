@@ -577,6 +577,93 @@ private slots:
         }
     }
 
+    void testWipeSyncStateForPathAndBelow()
+    {
+        // Helper to create a metadata record for a given path
+        auto makeRecord = [&](const QString &path, ItemType type = ItemTypeFile) {
+            SyncJournalFileRecord record;
+            record._path = path.toUtf8();
+            record._modtime = dropMsecs(QDateTime::currentDateTime());
+            record._type = type;
+            record._etag = "abc123";
+            record._fileId = "id_" + path.toUtf8();
+            record._fileSize = 1024;
+            QVERIFY(_db.setFileRecord(record));
+        };
+
+        makeRecord("parent", ItemTypeDirectory);
+        makeRecord("parent/child", ItemTypeDirectory);
+        makeRecord("parent/child/file.txt");
+        makeRecord("parent/other.txt");
+        makeRecord("sibling", ItemTypeDirectory);
+        makeRecord("sibling/file.txt");
+
+        // Set downloadinfo for a file inside the target subtree
+        SyncJournalDb::DownloadInfo dlInfo;
+        dlInfo._tmpfile = "/tmp/dl_test";
+        dlInfo._etag = "dl_etag";
+        dlInfo._valid = true;
+        _db.setDownloadInfo("parent/child/file.txt", dlInfo);
+
+        // Set uploadinfo for another file inside the target subtree
+        SyncJournalDb::UploadInfo ulInfo;
+        ulInfo._size = 512;
+        ulInfo._errorCount = 1;
+        ulInfo._valid = true;
+        _db.setUploadInfo("parent/child/file.txt", ulInfo);
+
+        // Set a blacklist entry for the target path itself
+        SyncJournalErrorBlacklistRecord blRecord;
+        blRecord._file = "parent/child";
+        blRecord._errorString = "test error";
+        blRecord._lastTryTime = QDateTime::currentSecsSinceEpoch();
+        blRecord._retryCount = 2;
+        _db.setErrorBlacklistEntry(blRecord);
+
+        // Wipe state for "parent/child" and everything below it;
+        // the return value must include the deleted downloadinfo so callers can
+        // clean up the corresponding temporary files from disk.
+        const auto deletedDownloads = _db.wipeSyncStateForPathAndBelow("parent/child");
+        QCOMPARE(deletedDownloads.size(), 1);
+        QCOMPARE(deletedDownloads.first()._tmpfile, QStringLiteral("/tmp/dl_test"));
+
+        SyncJournalFileRecord rec;
+
+        // Metadata for "parent/child" and its child must be gone
+        QVERIFY(_db.getFileRecord(QByteArrayLiteral("parent/child"), &rec));
+        QVERIFY(!rec.isValid());
+        QVERIFY(_db.getFileRecord(QByteArrayLiteral("parent/child/file.txt"), &rec));
+        QVERIFY(!rec.isValid());
+
+        // "parent" must still exist but have an invalid etag (forced remote re-discovery)
+        QVERIFY(_db.getFileRecord(QByteArrayLiteral("parent"), &rec));
+        QVERIFY(rec.isValid());
+        QCOMPARE(rec._etag, QByteArrayLiteral("_invalid_"));
+
+        // "parent/other.txt" must be untouched
+        QVERIFY(_db.getFileRecord(QByteArrayLiteral("parent/other.txt"), &rec));
+        QVERIFY(rec.isValid());
+        QCOMPARE(rec._etag, QByteArrayLiteral("abc123"));
+
+        // "sibling" and its child must be entirely untouched
+        QVERIFY(_db.getFileRecord(QByteArrayLiteral("sibling"), &rec));
+        QVERIFY(rec.isValid());
+        QCOMPARE(rec._etag, QByteArrayLiteral("abc123"));
+        QVERIFY(_db.getFileRecord(QByteArrayLiteral("sibling/file.txt"), &rec));
+        QVERIFY(rec.isValid());
+
+        // Download/upload info for the wiped subtree must be gone
+        QVERIFY(!_db.getDownloadInfo("parent/child/file.txt")._valid);
+        QVERIFY(!_db.getUploadInfo("parent/child/file.txt")._valid);
+
+        // Blacklist entry for "parent/child" must be gone
+        QVERIFY(_db.errorBlacklistEntry("parent/child")._file.isEmpty());
+
+        // Clean up for other tests
+        _db.deleteFileRecord("parent", true);
+        _db.deleteFileRecord("sibling", true);
+    }
+
 private:
     SyncJournalDb _db;
 };

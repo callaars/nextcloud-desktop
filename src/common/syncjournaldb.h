@@ -199,6 +199,19 @@ public:
     void schedulePathForRemoteDiscovery(const QByteArray &fileName);
 
     /**
+     * Reset all sync state for a path and everything below it, as if the path
+     * had never been seen before.
+     *
+     * Specifically:
+     * - Ancestor directory eTags are invalidated so the next sync re-fetches
+     *   them from the server and re-discovers the path.
+     * - Metadata records for the path and all descendants are deleted.
+     * - Pending download/upload info and error blacklist entries are cleared.
+     */
+    QVector<DownloadInfo> wipeSyncStateForPathAndBelow(const QString &path) { return wipeSyncStateForPathAndBelow(path.toUtf8()); }
+    QVector<DownloadInfo> wipeSyncStateForPathAndBelow(const QByteArray &path);
+
+    /**
      * Wipe _etagStorageFilter. Also done implicitly on close().
      */
     void clearEtagStorageFilter();

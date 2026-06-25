@@ -118,6 +118,8 @@ extension FileProviderExtension: NSFileProviderCustomAction {
                 return performKeepDownloadedAction(keepDownloaded: false, onItemsWithIdentifiers: itemIdentifiers, completionHandler: completionHandler)
             case .evict:
                 return performEvictAction(onItemsWithIdentifiers: itemIdentifiers, completionHandler: completionHandler)
+            case .forceResync:
+                return performForceResyncAction(onItemsWithIdentifiers: itemIdentifiers, completionHandler: completionHandler)
             default:
                 logger.error("Unsupported action: \(actionIdentifier.rawValue)")
                 completionHandler(NSError(domain: NSCocoaErrorDomain, code: NSFeatureUnsupportedError))
@@ -261,6 +263,128 @@ extension FileProviderExtension: NSFileProviderCustomAction {
             }
         }
 
+        return progress
+    }
+
+    ///
+    /// Force a re-synchronisation of the selected directories and their contents.
+    ///
+    /// For each selected directory this invalidates the stored etags of the
+    /// directory and all of its descendant directories via
+    /// ``FilesDatabaseManager/resetSyncStateForDirectoryAndChildren(ocId:)``,
+    /// then signals the framework to re-enumerate. Because File Provider gates
+    /// child re-enumeration on a container's etag, the cleared etags cause every
+    /// level of the subtree to be re-`PROPFIND`ed and re-validated against the
+    /// server on the next enumeration — the File Provider analogue of the classic
+    /// sync engine's "Force sync state reset".
+    ///
+    /// All selected directories are processed independently: a failure on one
+    /// item does not prevent the others from being reset.
+    ///
+    private func performForceResyncAction(onItemsWithIdentifiers itemIdentifiers: [NSFileProviderItemIdentifier], completionHandler: @Sendable @escaping ((any Error)?) -> Void) -> Progress {
+        guard let dbManager else {
+            logger.error("Not resetting sync state because database is unreachable.")
+            completionHandler(NSFileProviderError(.cannotSynchronize))
+            return Progress()
+        }
+
+        guard let manager else {
+            logger.error("Not resetting sync state because file provider manager is not available.")
+            completionHandler(NSFileProviderError(.providerNotFound))
+            return Progress()
+        }
+
+        let progress = Progress()
+
+        if itemIdentifiers.isEmpty {
+            logger.info("No items to process for force resync action.")
+            completionHandler(nil)
+            return progress
+        }
+
+        progress.totalUnitCount = Int64(itemIdentifiers.count)
+
+        // Capture as local to avoid implicit self captures inside the task group.
+        let localLogger = logger
+
+        let task = Task {
+            var firstError: (any Error)? = nil
+
+            // Process all items concurrently so a failure on one does not block others.
+            await withTaskGroup(of: (any Error)?.self) { group in
+                for identifier in itemIdentifiers {
+                    group.addTask {
+                        guard let metadata = dbManager.itemMetadata(identifier) else {
+                            return NSError.fileProviderErrorForNonExistentItem(withIdentifier: identifier)
+                        }
+
+                        guard metadata.directory else {
+                            localLogger.error(
+                                "Skipping force resync of non-directory item.",
+                                [.item: identifier]
+                            )
+                            return NSFileProviderError(.cannotSynchronize)
+                        }
+
+                        guard let resetCount =
+                            dbManager.resetSyncStateForDirectoryAndChildren(ocId: metadata.ocId)
+                        else {
+                            return NSFileProviderError(.cannotSynchronize)
+                        }
+
+                        if resetCount == 0 {
+                            // All directories in the subtree have pending uploads and were
+                            // intentionally skipped. No etags were cleared, so signalling
+                            // the enumerator would be a no-op.
+                            localLogger.info(
+                                "Force resync skipped all directories due to pending uploads.",
+                                [.item: identifier]
+                            )
+                            return nil
+                        }
+
+                        // Re-enumerate the directory so its now-invalidated etag triggers
+                        // a fresh depth-1 PROPFIND.
+                        do {
+                            try await manager.signalEnumerator(for: identifier)
+                        } catch {
+                            localLogger.error(
+                                "Failed to signal enumerator after force resync; the cleared etag will trigger re-enumeration on next framework wake.",
+                                [.item: identifier, .error: error]
+                            )
+                        }
+                        return nil
+                    }
+                }
+
+                for await itemError in group {
+                    if let error = itemError {
+                        if firstError == nil { firstError = error }
+                    } else {
+                        progress.completedUnitCount += 1
+                    }
+                }
+            }
+
+            // Signal the working set so any materialised descendants refresh.
+            do {
+                try await manager.signalEnumerator(for: .workingSet)
+            } catch {
+                localLogger.error(
+                    "Failed to signal working set enumerator after force resync.",
+                    [.error: error]
+                )
+            }
+
+            if firstError != nil {
+                localLogger.error("Force resync action completed with one or more errors.")
+            } else {
+                localLogger.info("All directories successfully processed by force resync action.")
+            }
+            completionHandler(firstError)
+        }
+
+        progress.cancellationHandler = { task.cancel() }
         return progress
     }
 }

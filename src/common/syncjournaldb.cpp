@@ -2531,6 +2531,72 @@ void SyncJournalDb::clearEtagStorageFilter()
     _etagStorageFilter.clear();
 }
 
+QVector<SyncJournalDb::DownloadInfo> SyncJournalDb::wipeSyncStateForPathAndBelow(const QByteArray &path)
+{
+    // Invalidate etags on ancestor directories so the next sync re-fetches
+    // their contents and treats the path as new.
+    schedulePathForRemoteDiscovery(path);
+
+    // Remove metadata records for the path and all its descendants.
+    deleteFileRecord(QString::fromUtf8(path), /*recursively=*/true);
+
+    QMutexLocker locker(&_mutex);
+    if (!checkConnect()) {
+        return {};
+    }
+
+    // Collect download infos before deleting so the caller can remove orphaned
+    // temporary files from disk.
+    // Columns: [0] tmpfile, [1] etag, [2] errorcount — consumed by toDownloadInfo();
+    //          [3] path — unused here, present for consistency with other downloadinfo queries.
+    QVector<DownloadInfo> deletedDownloads;
+    {
+        SqlQuery query(_db);
+        query.prepare("SELECT tmpfile, etag, errorcount, path FROM downloadinfo WHERE " IS_PREFIX_PATH_OR_EQUAL("?1", "path"));
+        query.bindValue(1, path);
+        if (query.exec()) {
+            while (query.next().hasData) {
+                DownloadInfo info;
+                toDownloadInfo(query, &info);
+                deletedDownloads.append(info);
+            }
+        }
+    }
+
+    // Clear all in-progress transfer state and error blacklist entries for the path and
+    // its children in a single transaction so the wipe is atomic on crash.
+    startTransaction();
+    {
+        SqlQuery query(_db);
+        query.prepare("DELETE FROM downloadinfo WHERE " IS_PREFIX_PATH_OR_EQUAL("?1", "path"));
+        query.bindValue(1, path);
+        if (!query.exec()) {
+            sqlFail(QStringLiteral("wipeSyncStateForPathAndBelow: delete downloadinfo"), query);
+            return deletedDownloads;
+        }
+    }
+    {
+        SqlQuery query(_db);
+        query.prepare("DELETE FROM uploadinfo WHERE " IS_PREFIX_PATH_OR_EQUAL("?1", "path"));
+        query.bindValue(1, path);
+        if (!query.exec()) {
+            sqlFail(QStringLiteral("wipeSyncStateForPathAndBelow: delete uploadinfo"), query);
+            return deletedDownloads;
+        }
+    }
+    {
+        SqlQuery query(_db);
+        query.prepare("DELETE FROM blacklist WHERE " IS_PREFIX_PATH_OR_EQUAL("?1", "path"));
+        query.bindValue(1, path);
+        if (!query.exec()) {
+            sqlFail(QStringLiteral("wipeSyncStateForPathAndBelow: delete blacklist"), query);
+            return deletedDownloads;
+        }
+    }
+    commitTransaction();
+    return deletedDownloads;
+}
+
 void SyncJournalDb::forceRemoteDiscoveryNextSync()
 {
     QMutexLocker locker(&_mutex);

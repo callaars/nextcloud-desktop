@@ -450,6 +450,12 @@ public slots:
      */
     void schedulePathForLocalDiscovery(const QString &relativePath);
 
+    /**
+     * Reset all sync state for a folder-relative path and everything below it,
+     * then schedule a sync so the path is re-downloaded as if never seen before.
+     */
+    void resetPathForResync(const QString &relativePath);
+
     /** Ensures that the next sync performs a full local discovery. */
     void slotNextSyncFullLocalDiscovery();
 
@@ -628,6 +634,10 @@ private:
     bool _hasSwitchedToVfs = false;
 
     bool _silenceErrorsUntilNextSync = false;
+
+    /// Paths queued by resetPathForResync() while a sync was running.
+    /// Applied in slotSyncFinished() once the engine is no longer busy.
+    QStringList _pendingResyncPaths;
 
 #ifdef Q_OS_MACOS
     /** Whether this folder needs the user to re-approve access for macOS sandbox.

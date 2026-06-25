@@ -64,4 +64,13 @@ extension NSFileProviderExtensionActionIdentifier {
     static var openInBrowser: NSFileProviderExtensionActionIdentifier {
         NSFileProviderExtensionActionIdentifier("\(prefix)OpenInBrowserAction")
     }
+
+    ///
+    /// Custom action to force a re-synchronisation of a directory and its contents by invalidating stored etags so the framework re-enumerates the subtree from scratch.
+    ///
+    /// The raw value must be maintained manually and redundantly in the custom actions of the file provider extension target declared at build time.
+    ///
+    static var forceResync: NSFileProviderExtensionActionIdentifier {
+        NSFileProviderExtensionActionIdentifier("\(prefix)ForceResyncAction")
+    }
 }

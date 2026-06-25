@@ -140,6 +140,7 @@ private:
     Q_INVOKABLE void command_LOCK_FILE(const QString &localFile, OCC::SocketListener *listener);
     Q_INVOKABLE void command_UNLOCK_FILE(const QString &localFile, OCC::SocketListener *listener);
     Q_INVOKABLE void command_FILE_ACTIONS(const QString &localFile, OCC::SocketListener *listener);
+    Q_INVOKABLE void command_FORCE_RESYNC(const QString &localFile, OCC::SocketListener *listener);
 
     void setFileLock(const QString &localFile, const SyncFileItem::LockStatus lockState) const;
 
